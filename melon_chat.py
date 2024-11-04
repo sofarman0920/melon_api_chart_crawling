@@ -1,6 +1,7 @@
 import time
 import json
 import logging
+import os
 from datetime import datetime, timedelta
 from melon import ChartData
 from typing import List, Dict
@@ -12,7 +13,8 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 class MelonChartHistory:
     def __init__(self, imageSize: int = 256, delay_seconds: int = 2):
         self.imageSize = imageSize
-        self.delay_seconds = delay_seconds20
+        self.delay_seconds = delay_seconds  # delay_seconds20 오류 수정
+        self.temp_files = []  # 임시 파일 목록 저장
 
     def get_chart_by_date(self, target_date: datetime) -> List[Dict]:
         """특정 날짜의 멜론 차트 데이터를 가져옵니다."""
@@ -20,7 +22,6 @@ class MelonChartHistory:
         try:
             chart = ChartData(imageSize=self.imageSize)
             time.sleep(self.delay_seconds)
-            
             chart_data = []
             for entry in chart.entries:
                 chart_data.append({
@@ -35,7 +36,6 @@ class MelonChartHistory:
                     '순위변동': entry.rank - entry.lastPos if not entry.isNew else 'NEW'
                 })
             return chart_data
-            
         except Exception as e:
             logging.error(f"차트 데이터 수집 실패: {str(e)}")
             return []
@@ -46,23 +46,31 @@ class MelonChartHistory:
         try:
             with open(filename, 'w', encoding='utf-8') as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
+            self.temp_files.append(filename)  # 임시 파일 목록에 추가
             logging.info(f"중간 데이터 저장 완료: {filename}")
         except Exception as e:
             logging.error(f"데이터 저장 실패: {str(e)}")
 
-def get_charts_for_period(start_date: datetime, end_date: datetime, 
+    def cleanup_temp_files(self):
+        """임시 파일 삭제"""
+        for file in self.temp_files:
+            try:
+                os.remove(file)
+                logging.info(f"임시 파일 삭제 완료: {file}")
+            except Exception as e:
+                logging.error(f"임시 파일 삭제 실패: {str(e)}")
+        self.temp_files = []
+
+def get_charts_for_period(start_date: datetime, end_date: datetime,
                          interval: str = 'hour', delay_seconds: int = 2) -> List[Dict]:
     """기간별 차트 데이터를 수집합니다."""
     all_charts = []
-    
-    # 수집 주기에 따른 timedelta 설정
     interval_mapping = {
         'year': timedelta(days=365),
         'month': timedelta(days=30),
         'day': timedelta(days=1),
         'hour': timedelta(hours=1)
     }
-    
     interval_delta = interval_mapping.get(interval.lower(), timedelta(hours=1))
     total_iterations = int((end_date - start_date) / interval_delta) + 1
     
@@ -74,21 +82,22 @@ def get_charts_for_period(start_date: datetime, end_date: datetime,
             while current_date <= end_date:
                 daily_chart = chart_collector.get_chart_by_date(current_date)
                 all_charts.extend(daily_chart)
-                
                 if len(all_charts) % 100 == 0:
                     chart_collector.save_intermediate_data(all_charts, current_date)
-                
                 current_date += interval_delta
                 pbar.update(1)
-                
+
         # 최종 데이터 저장
         df = pd.DataFrame(all_charts)
-        df.to_csv(f'melon_charts_{start_date.strftime("%Y%m%d")}_{end_date.strftime("%Y%m%d")}.csv',
-                 index=False, encoding='utf-8-sig')
-                
+        output_filename = f'melon_charts_{start_date.strftime("%Y%m%d")}_{end_date.strftime("%Y%m%d")}.csv'
+        df.to_csv(output_filename, index=False, encoding='utf-8-sig')
+        
+        # 임시 파일 삭제
+        chart_collector.cleanup_temp_files()
+        
     except Exception as e:
         logging.error(f"오류 발생: {str(e)}")
-        
+    
     return all_charts
 
 if __name__ == "__main__":
